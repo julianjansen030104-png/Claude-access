@@ -1,0 +1,258 @@
+
+<div style="position:relative; width:100%; background:var(--color-background-secondary); border-radius:var(--border-radius-lg); border:0.5px solid var(--color-border-tertiary); overflow:hidden;">
+
+  <div id="loading-screen" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;background:var(--color-background-secondary);">
+    <div style="font-size:14px;color:var(--color-text-secondary);margin-bottom:8px;">Lade 3D Modell…</div>
+    <div style="width:200px;height:3px;background:var(--color-border-tertiary);border-radius:2px;overflow:hidden;">
+      <div id="prog-bar" style="height:100%;width:0%;background:var(--color-text-primary);border-radius:2px;transition:width 0.3s;"></div>
+    </div>
+    <div id="prog-text" style="font-size:12px;color:var(--color-text-tertiary);margin-top:8px;">0%</div>
+  </div>
+
+  <canvas id="three-canvas" style="display:block;width:100%;height:480px;"></canvas>
+
+  <div style="padding:1rem 1.25rem;border-top:0.5px solid var(--color-border-tertiary);background:var(--color-background-primary);">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:10px;">Farbvariante wählen</div>
+    <div id="palette-row" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;"></div>
+    <div id="variant-info" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);overflow:hidden;"></div>
+  </div>
+
+  <div style="padding:0 1.25rem 0.75rem;font-size:11px;color:var(--color-text-tertiary);">
+    Ziehen zum Drehen · Scrollen zum Zoomen · Rechtsklick zum Verschieben
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+const variants = [
+  { id:1, name:'Prototype', bowl:'#A8D1A0', lid:'#B8956A', label:'Mint + Sand', sub:'Referenz-Druck', fdm:'PLA Standard' },
+  { id:2, name:'Stille Alb', bowl:'#C8D4C0', lid:'#E8E4DC', label:'Salbeigrau + Kalkweiß', sub:'H16 Landschaft', fdm:'PLA Matte' },
+  { id:3, name:'Noir Sobek', bowl:'#2A2A2A', lid:'#444444', label:'Tiefschwarz + Graphit', sub:'Betonkubus H16', fdm:'Matte Black PLA' },
+  { id:4, name:'Blanc Architecte', bowl:'#F0EEE8', lid:'#E0DDD4', label:'Off-White + Warmgrau', sub:'Glaskubus Innenraum', fdm:'PLA Cream' },
+  { id:5, name:'Terra IST', bowl:'#C4A882', lid:'#C8002A', label:'Terra-Beige + IST-Rot', sub:'Interstuhl Brand', fdm:'PLA Bicolor' },
+  { id:6, name:'Dusk Saison', bowl:'#3D524E', lid:'#D4A96A', label:'Petrol + Goldocke', sub:'Bewusster Genuss', fdm:'Silk Matte PLA' },
+  { id:7, name:'Mineral Präzision', bowl:'#C8BFB0', lid:'#4A4540', label:'Kalkstein + Espresso', sub:'Analytik & Form', fdm:'PLA Warm + Braun' },
+  { id:8, name:'Nascent', bowl:'#C8A882', lid:'#E8D8C0', label:'Lehm + Linen', sub:'Ehrliche Materie', fdm:'PLA Natural' },
+];
+
+let currentVariant = 0;
+let scene, camera, renderer, bowlMesh, lidMesh, controls_state;
+let isDragging = false, prevMouse = {x:0,y:0};
+let rotX = 0.2, rotY = 0.4;
+let camDist = 3.2;
+let panX = 0, panY = 0;
+let rightDown = false, prevRight = {x:0,y:0};
+
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3),16)/255;
+  const g = parseInt(hex.slice(3,5),16)/255;
+  const b = parseInt(hex.slice(5,7),16)/255;
+  return new THREE.Color(r,g,b);
+}
+
+function initThree() {
+  const canvas = document.getElementById('three-canvas');
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+
+  renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+  renderer.setSize(W, H, false);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  scene = new THREE.Scene();
+  scene.background = null;
+
+  camera = new THREE.PerspectiveCamera(42, W/H, 0.01, 100);
+  camera.position.set(0, 1.2, camDist);
+  camera.lookAt(0,0,0);
+
+  const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+  scene.add(ambient);
+
+  const key = new THREE.DirectionalLight(0xffffff, 1.1);
+  key.position.set(3,5,3);
+  key.castShadow = true;
+  key.shadow.mapSize.width = 1024;
+  key.shadow.mapSize.height = 1024;
+  key.shadow.camera.near = 0.5;
+  key.shadow.camera.far = 20;
+  key.shadow.camera.left = -3;
+  key.shadow.camera.right = 3;
+  key.shadow.camera.top = 3;
+  key.shadow.camera.bottom = -3;
+  scene.add(key);
+
+  const fill = new THREE.DirectionalLight(0xffffff, 0.4);
+  fill.position.set(-3,2,-2);
+  scene.add(fill);
+
+  const rim = new THREE.DirectionalLight(0xffffff, 0.3);
+  rim.position.set(0,3,-4);
+  scene.add(rim);
+
+  const groundGeo = new THREE.PlaneGeometry(10,10);
+  const groundMat = new THREE.ShadowMaterial({opacity:0.12});
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI/2;
+  ground.position.y = -0.75;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  loadGLB();
+
+  canvas.addEventListener('mousedown', e => {
+    if(e.button===2){ rightDown=true; prevRight={x:e.clientX,y:e.clientY}; }
+    else { isDragging=true; prevMouse={x:e.clientX,y:e.clientY}; }
+  });
+  window.addEventListener('mouseup', e => { isDragging=false; rightDown=false; });
+  canvas.addEventListener('mousemove', e => {
+    if(isDragging){ rotY+=(e.clientX-prevMouse.x)*0.008; rotX+=(e.clientY-prevMouse.y)*0.008; prevMouse={x:e.clientX,y:e.clientY}; }
+    if(rightDown){ panX+=(e.clientX-prevRight.x)*0.003; panY-=(e.clientY-prevRight.y)*0.003; prevRight={x:e.clientX,y:e.clientY}; }
+  });
+  canvas.addEventListener('wheel', e => { e.preventDefault(); camDist=Math.max(1.5,Math.min(6,camDist+e.deltaY*0.004)); },{passive:false});
+  canvas.addEventListener('contextmenu', e=>e.preventDefault());
+
+  window.addEventListener('resize', ()=>{
+    const W2=canvas.clientWidth, H2=canvas.clientHeight;
+    renderer.setSize(W2,H2,false);
+    camera.aspect=W2/H2; camera.updateProjectionMatrix();
+  });
+
+  animate();
+}
+
+function loadGLB() {
+  const prog = document.getElementById('prog-bar');
+  const progTxt = document.getElementById('prog-text');
+
+  const loader = new THREE.GLTFLoader();
+
+  const url = 'https://julianjansen030104-png.github.io/Claude-access/009.5_08-04-2026_Sklaiert%20f%C3%BCr%20den%203D%20Drucker_Deckel_compressed.glb';
+
+  loader.load(url, (gltf) => {
+    const model = gltf.scene;
+
+    const box = new THREE.Box3().setFromObject(model);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const scale = 1.6 / maxDim;
+
+    model.scale.setScalar(scale);
+    model.position.sub(center.multiplyScalar(scale));
+    model.position.y += 0.05;
+
+    scene.add(model);
+
+    document.getElementById('loading-screen').style.display='none';
+  },
+  (xhr) => {
+    const pct = Math.round(xhr.loaded / xhr.total * 100);
+    prog.style.width = pct + '%';
+    progTxt.textContent = pct + '%';
+  },
+  (err) => {
+    console.error(err);
+    buildFallback();
+    document.getElementById('loading-screen').style.display='none';
+  });
+}
+
+function buildFallback() {
+  const bowlGeo = new THREE.SphereGeometry(0.75, 64, 32, 0, Math.PI*2, 0, Math.PI*0.6);
+  const bowlMat = new THREE.MeshStandardMaterial({roughness:0.88,metalness:0.0,side:THREE.DoubleSide});
+  bowlMesh = new THREE.Mesh(bowlGeo, bowlMat);
+  bowlMesh.castShadow = true;
+  bowlMesh.receiveShadow = true;
+  bowlMesh.rotation.x = Math.PI;
+  bowlMesh.position.y = -0.12;
+  scene.add(bowlMesh);
+
+  const lidGeo = new THREE.CylinderGeometry(0.35, 0.33, 0.1, 48);
+  const lidMat = new THREE.MeshStandardMaterial({roughness:0.82,metalness:0.0});
+  lidMesh = new THREE.Mesh(lidGeo, lidMat);
+  lidMesh.castShadow = true;
+  lidMesh.position.set(0.25, 0.25, 0);
+  scene.add(lidMesh);
+
+  applyVariant(0);
+}
+
+function applyVariant(idx) {
+  currentVariant = idx;
+  const v = variants[idx];
+  if(bowlMesh) {
+    if(Array.isArray(bowlMesh.material)){
+      bowlMesh.material.forEach(m=>m.color.set(hexToRgb(v.bowl)));
+    } else {
+      bowlMesh.material.color.set(hexToRgb(v.bowl));
+    }
+  }
+  if(lidMesh) {
+    if(Array.isArray(lidMesh.material)){
+      lidMesh.material.forEach(m=>m.color.set(hexToRgb(v.lid)));
+    } else {
+      lidMesh.material.color.set(hexToRgb(v.lid));
+    }
+  }
+
+  document.querySelectorAll('.pal-btn').forEach((b,i)=>{
+    b.style.outline = i===idx ? '2px solid var(--color-text-primary)' : 'none';
+    b.style.outlineOffset = '2px';
+  });
+
+  const info = document.getElementById('variant-info');
+  info.innerHTML = `
+    <div style="padding:10px 14px;border-right:0.5px solid var(--color-border-tertiary);">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:4px;">Variante</div>
+      <div style="font-size:14px;font-weight:500;color:var(--color-text-primary);">${v.id} · ${v.name}</div>
+      <div style="font-size:12px;color:var(--color-text-tertiary);">${v.sub}</div>
+    </div>
+    <div style="padding:10px 14px;border-right:0.5px solid var(--color-border-tertiary);">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:6px;">Farben</div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <div style="width:22px;height:22px;border-radius:4px;background:${v.bowl};border:0.5px solid rgba(0,0,0,0.1);"></div>
+        <div style="width:22px;height:22px;border-radius:4px;background:${v.lid};border:0.5px solid rgba(0,0,0,0.1);"></div>
+        <span style="font-size:12px;color:var(--color-text-secondary);">${v.label}</span>
+      </div>
+    </div>
+    <div style="padding:10px 14px;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:var(--color-text-tertiary);margin-bottom:4px;">FDM Material</div>
+      <div style="font-size:13px;color:var(--color-text-secondary);">${v.fdm}</div>
+    </div>
+  `;
+}
+
+function buildPalettes() {
+  const row = document.getElementById('palette-row');
+  variants.forEach((v,i)=>{
+    const btn = document.createElement('button');
+    btn.className = 'pal-btn';
+    btn.title = v.name;
+    btn.style.cssText = `display:flex;align-items:center;gap:6px;padding:5px 10px 5px 6px;border:0.5px solid var(--color-border-tertiary);border-radius:20px;background:var(--color-background-primary);cursor:pointer;font-size:12px;color:var(--color-text-secondary);`;
+    btn.innerHTML = `
+      <div style="display:flex;gap:3px;">
+        <div style="width:14px;height:14px;border-radius:50%;background:${v.bowl};border:0.5px solid rgba(0,0,0,0.1);"></div>
+        <div style="width:14px;height:14px;border-radius:50%;background:${v.lid};border:0.5px solid rgba(0,0,0,0.1);"></div>
+      </div>
+      ${v.name}
+    `;
+    btn.onclick = ()=>applyVariant(i);
+    row.appendChild(btn);
+  });
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  scene.rotation.y = rotY;
+  scene.rotation.x = rotX;
+  camera.position.set(panX, 1.2+panY, camDist);
+  camera.lookAt(panX, panY, 0);
+  renderer.render(scene, camera);
+}
+
+buildPalettes();
+initThree();
+</script>
