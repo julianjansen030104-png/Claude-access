@@ -128,7 +128,7 @@ function loadGLB() {
 
   const loader = new THREE.GLTFLoader();
 
-  const url = 'https://raw.githubusercontent.com/julianjansen030104-png/Claude-access/main/bowl.glb';
+  const url = 'https://github.com/julianjansen030104-png/Claude-access/raw/main/bowl.glb';
 
   loader.load(url, (gltf) => {
     const model = gltf.scene;
@@ -153,7 +153,7 @@ function loadGLB() {
     progTxt.textContent = pct + '%';
   },
   (err) => {
-    console.error(err);
+    console.error('Failed to load GLB:', err);
     buildFallback();
     document.getElementById('loading-screen').style.display='none';
   });
